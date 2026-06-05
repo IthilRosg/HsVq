@@ -1,0 +1,28 @@
+# Dependencies
+frontend/node_modules/
+backend/vendor/
+
+# Build output
+frontend/dist/
+backend/server.exe
+backend/seed.exe
+backend/*.exe
+backend/data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+server.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
