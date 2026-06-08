@@ -1,37 +1,42 @@
-import { Outlet, NavLink } from "react-router-dom"
+import { Outlet, NavLink } from 'react-router-dom'
 
 const nav = [
-  { to: "/", label: "Dashboard", icon: "[S]" },
-  { to: "/users", label: "Users", icon: "[U]" },
-  { to: "/inbounds", label: "Inbounds", icon: "[I]" },
-  { to: "/plans", label: "Plans", icon: "[P]" },
-  { to: "/profiles", label: "Clients", icon: "[C]" },
+  { to: '/', label: 'Dashboard', icon: '◆' },
+  { to: '/users', label: 'Users', icon: '●' },
+  { to: '/inbounds', label: 'Inbounds', icon: '▣' },
+  { to: '/plans', label: 'Plans', icon: '▲' },
+  { to: '/profiles', label: 'Clients', icon: '★' },
 ]
 
 export function Layout({ onLogout }: { onLogout: () => void }) {
   return (
-    <div className="min-h-screen flex">
-      <aside className="w-64 bg-white dark:bg-neutral-900 border-r border-gray-200 dark:border-neutral-700 p-4 flex flex-col">
-        <h1 className="text-xl font-bold mb-6 text-blue-600">HsVq Panel</h1>
-        <nav className="flex flex-col gap-1 flex-1">
+    <div className="h-screen flex bg-gray-100">
+      <aside className="w-56 bg-white shadow-sm flex flex-col">
+        <div className="p-5 border-b">
+          <h1 className="text-lg font-bold text-blue-600">HsVq Panel</h1>
+        </div>
+        <nav className="flex-1 p-3 space-y-1">
           {nav.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.to === "/"}
+            <NavLink key={item.to} to={item.to} end={item.to === '/'}
               className={({ isActive }) =>
-                "flex items-center gap-2 px-3 py-2 rounded-lg transition-colors " +
+                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-150 active:scale-[0.97] ' +
                 (isActive
-                  ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
-                  : "text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-neutral-800")
+                  ? 'bg-blue-50 text-blue-700 font-medium shadow-sm'
+                  : 'text-gray-600 hover:bg-gray-100')
               }>
-              <span>{item.icon}</span>
+              <span className="text-base w-5 text-center">{item.icon}</span>
               {item.label}
             </NavLink>
           ))}
         </nav>
-        <button onClick={onLogout} className="mt-4 text-sm text-red-500 hover:text-red-600 text-left px-3 py-2">
-          Sign Out
-        </button>
+        <div className="p-3 border-t">
+          <button onClick={onLogout}
+            className="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-red-50 rounded-lg transition-all active:scale-[0.97]">
+            Sign Out
+          </button>
+        </div>
       </aside>
-      <main className="flex-1 p-6 overflow-auto">
+      <main className="flex-1 overflow-auto p-6">
         <Outlet />
       </main>
     </div>
