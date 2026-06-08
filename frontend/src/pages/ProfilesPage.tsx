@@ -132,6 +132,8 @@ export function ProfilesPage() {
                     <span className="text-xs text-gray-400 truncate max-w-[120px]">{subURL(p).slice(0, 30)}...</span>
                     <button onClick={() => navigator.clipboard.writeText(subURL(p))}
                       className="text-blue-600 text-xs hover:underline shrink-0">Copy</button>
+                    <button onClick={() => window.open("/api/configs/user/" + p.id + "/qr")}
+                      className="text-green-600 text-xs hover:underline shrink-0">QR</button>
                   </div>
                 </td>
                 <td className="px-4 py-3 text-right">

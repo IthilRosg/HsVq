@@ -15,6 +15,7 @@ import (
 
 	"github.com/luncher4/vpn-panel/internal/models"
 	"github.com/luncher4/vpn-panel/internal/services"
+	"github.com/skip2/go-qrcode"
 )
 
 type LoginRequest struct {
@@ -737,10 +738,37 @@ func GenerateConfig(db *gorm.DB) gin.HandlerFunc {
 func GenerateQR(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.Param("id")
-		// TODO: генерация QR-кода
-		c.JSON(http.StatusOK, gin.H{
-			"message": "qr generation stub",
-			"user_id": userID,
-		})
+		var profile models.SubscriptionProfile
+		if err := db.Where("user_id = ? OR id = ?", userID, userID).First(&profile).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+			return
+		}
+		var node models.Node
+		db.First(&node, profile.NodeID)
+
+		var inboundIDs []uint
+		json.Unmarshal([]byte(profile.InboundIDs), &inboundIDs)
+		var inbound models.Inbound
+		db.Where("id IN ? AND is_active = ?", inboundIDs, true).First(&inbound)
+		if inbound.ID == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no active inbound"})
+			return
+		}
+
+		// Строим share link
+		add := node.Address
+		if add == "" { add = "45.134.39.18" }
+		pbk := services.GetPublicKey()
+		shareLink := fmt.Sprintf("vless://%s@%s:%d?security=reality&encryption=none&pbk=%s&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=www.cloudflare.com&sid=19e72187#%s",
+			profile.UUID, add, inbound.Port, pbk, profile.Name)
+
+		// Генерируем QR
+		png, err := qrcode.Encode(shareLink, qrcode.Medium, 256)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "qr generation failed"})
+			return
+		}
+
+		c.Data(http.StatusOK, "image/png", png)
 	}
 }
