@@ -36,6 +36,9 @@ func Migrate(db *gorm.DB) {
 		&models.TrafficDaily{},
 		&models.EventLog{},
 		&models.Notification{},
+		&models.SubscriptionProfile{},models.Notification{},
+		&models.Notification{},
+		&models.SubscriptionProfile{},models.SubscriptionProfile{},models.Notification{},
 	)
 	if err != nil {
 		log.Fatalf("Migration failed: %v", err)

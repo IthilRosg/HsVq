@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/luncher4/vpn-panel/internal/models"
+	"github.com/luncher4/vpn-panel/internal/services"
 )
 
 type LoginRequest struct {
@@ -85,11 +88,38 @@ func Dashboard(db *gorm.DB) gin.HandlerFunc {
 			nodeStats["address"] = node.Address
 		}
 
+		// Статистика трафика через Xray gRPC
+		traffic := map[string]int64{"up": 0, "down": 0}
+		if client, err := services.NewXrayStatsClient(); err == nil {
+			up, down, err := client.GetServerTraffic()
+			if err == nil {
+				traffic["up"] = up
+				traffic["down"] = down
+			}
+			client.Close()
+		}
+
+		// Статистика по пользователям из TrafficLog за сегодня
+		var todayUp, todayDown int64
+		today := time.Now().Format("2006-01-02")
+		db.Model(&models.TrafficDaily{}).Where("date = ?", today).
+			Select("COALESCE(SUM(upload_total), 0)").Scan(&todayUp)
+		db.Model(&models.TrafficDaily{}).Where("date = ?", today).
+			Select("COALESCE(SUM(download_total), 0)").Scan(&todayDown)
+
+		// Активные подписки с истекающим сроком (ближайшие 7 дней)
+		var expiringSoon int64
+		db.Model(&models.Subscription{}).Where("status = ? AND expires_at BETWEEN ? AND ?",
+			"active", time.Now(), time.Now().Add(7*24*time.Hour)).Count(&expiringSoon)
+
 		c.JSON(http.StatusOK, gin.H{
-			"total_users": userCount,
-			"active_subs": activeSubs,
-			"main_node":   nodeStats,
-			"server_time": time.Now(),
+			"total_users":   userCount,
+			"active_subs":   activeSubs,
+			"expiring_soon": expiringSoon,
+			"traffic_today": gin.H{"up_gb": int(todayUp / 1e9), "down_gb": int(todayDown / 1e9)},
+			"xray_traffic":  gin.H{"up_gb": int(traffic["up"] / 1e9), "down_gb": int(traffic["down"] / 1e9)},
+			"main_node":     nodeStats,
+			"server_time":   time.Now(),
 		})
 	}
 }
@@ -183,6 +213,211 @@ func UserStats(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+
+
+// ========== Subscription Profiles ==========
+
+func ListProfiles(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var profiles []models.SubscriptionProfile
+		db.Preload("User").Preload("Plan").Order("created_at desc").Find(&profiles)
+		c.JSON(http.StatusOK, profiles)
+	}
+}
+
+func CreateProfile(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		type CreateRequest struct {
+			Name       string   `json:"name" binding:"required"`
+			UserID     uint     `json:"user_id"`
+			PlanID     uint     `json:"plan_id" binding:"required"`
+			NodeID     uint     `json:"node_id"`
+			InboundIDs []uint   `json:"inbound_ids"`
+			ExpiresAt  string   `json:"expires_at"`
+		}
+		var req CreateRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		user := models.User{}
+		if req.UserID > 0 {
+			db.First(&user, req.UserID)
+		}
+		if user.ID == 0 {
+			user = models.User{
+				UUID: uuid.New().String(),
+				Name: req.Name,
+			}
+			db.Create(&user)
+		}
+
+		profile := models.SubscriptionProfile{
+			UserID: user.ID,
+			Name:   req.Name,
+			UUID:   user.UUID,
+			PlanID: req.PlanID,
+			NodeID: req.NodeID,
+			Status: "active",
+		}
+
+		if len(req.InboundIDs) > 0 {
+			data, _ := json.Marshal(req.InboundIDs)
+			profile.InboundIDs = string(data)
+		}
+
+		if req.ExpiresAt != "" {
+			t, err := time.Parse("2006-01-02", req.ExpiresAt)
+			if err == nil {
+				profile.ExpiresAt = t
+			} else {
+				profile.ExpiresAt = time.Now().Add(30 * 24 * time.Hour)
+			}
+		} else {
+			profile.ExpiresAt = time.Now().Add(30 * 24 * time.Hour)
+		}
+
+		profile.SubscriptionURL = fmt.Sprintf("https://hvq.airydeck.su/sub/%s", user.UUID)
+		db.Create(&profile)
+
+		xray := services.NewXrayManager()
+		for _, inboundID := range req.InboundIDs {
+			var inbound models.Inbound
+			if db.First(&inbound, inboundID).Error == nil {
+				xray.AddClientToInbound(inbound.Port, user.UUID)
+			}
+		}
+
+		c.JSON(http.StatusCreated, profile)
+	}
+}
+
+
+
+
+
+// ========== Nodes ==========
+
+func ListNodes(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var nodes []models.Node
+		db.Order("name asc").Find(&nodes)
+		c.JSON(http.StatusOK, nodes)
+	}
+}
+
+func CreateNode(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var node models.Node
+		if err := c.ShouldBindJSON(&node); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		db.Create(&node)
+		c.JSON(http.StatusCreated, node)
+	}
+}
+
+func DeleteNode(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		db.Delete(&models.Node{}, id)
+		c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	}
+}
+
+func ToggleInbound(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var inbound models.Inbound
+		if err := db.First(&inbound, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		inbound.IsActive = !inbound.IsActive
+		db.Save(&inbound)
+		c.JSON(http.StatusOK, inbound)
+	}
+}
+
+func ToggleNode(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var node models.Node
+		if err := db.First(&node, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		node.IsActive = !node.IsActive
+		db.Save(&node)
+		c.JSON(http.StatusOK, node)
+	}
+}
+
+func UpdateProfile(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var profile models.SubscriptionProfile
+		if err := db.First(&profile, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		var req struct {
+			Name       string   `json:"name"`
+			PlanID     uint     `json:"plan_id"`
+			NodeID     uint     `json:"node_id"`
+			InboundIDs []uint   `json:"inbound_ids"`
+			ExpiresAt  string   `json:"expires_at"`
+			Status     string   `json:"status"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if req.Name != "" { profile.Name = req.Name }
+		if req.PlanID > 0 { profile.PlanID = req.PlanID }
+		if req.NodeID > 0 { profile.NodeID = req.NodeID }
+		if len(req.InboundIDs) > 0 {
+			data, _ := json.Marshal(req.InboundIDs)
+			profile.InboundIDs = string(data)
+		}
+		if req.ExpiresAt != "" {
+			t, err := time.Parse("2006-01-02", req.ExpiresAt)
+			if err == nil { profile.ExpiresAt = t }
+		}
+		if req.Status != "" { profile.Status = req.Status }
+		db.Save(&profile)
+		c.JSON(http.StatusOK, profile)
+	}
+}
+
+func DeleteProfile(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var profile models.SubscriptionProfile
+		db.First(&profile, id)
+		db.Delete(&models.SubscriptionProfile{}, id)
+		c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	}
+}
+
+func GetProfile(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var profile models.SubscriptionProfile
+		if err := db.Preload("User").Preload("Plan").First(&profile, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		var inboundIDs []uint
+		json.Unmarshal([]byte(profile.InboundIDs), &inboundIDs)
+		var inbounds []models.Inbound
+		db.Where("id IN ?", inboundIDs).Find(&inbounds)
+		c.JSON(http.StatusOK, gin.H{"profile": profile, "inbounds": inbounds})
+	}
+}
+
 func ListInbounds(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var inbounds []models.Inbound
@@ -199,6 +434,14 @@ func CreateInbound(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		db.Create(&inbound)
+
+		// Синхронизируем с Xray
+		xray := services.NewXrayManager()
+		if err := xray.AddInbounds([]models.Inbound{inbound}); err != nil {
+			c.JSON(http.StatusOK, gin.H{"inbound": inbound, "xray_warning": err.Error()})
+			return
+		}
+
 		c.JSON(http.StatusCreated, inbound)
 	}
 }
@@ -220,10 +463,84 @@ func UpdateInbound(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+
+// ========== Subscription Plans ==========
+
+func ListPlans(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var plans []models.SubscriptionPlan
+		db.Order("price asc").Find(&plans)
+		c.JSON(http.StatusOK, plans)
+	}
+}
+
+func CreatePlan(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var plan models.SubscriptionPlan
+		if err := c.ShouldBindJSON(&plan); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		db.Create(&plan)
+		c.JSON(http.StatusCreated, plan)
+	}
+}
+
+func DeletePlan(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		db.Delete(&models.SubscriptionPlan{}, id)
+		c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	}
+}
+
+// ========== Subscriptions ==========
+
+func ListSubscriptions(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var subs []models.Subscription
+		db.Preload("User").Preload("Plan").Order("created_at desc").Find(&subs)
+		c.JSON(http.StatusOK, subs)
+	}
+}
+
+func CreateSubscription(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var sub models.Subscription
+		if err := c.ShouldBindJSON(&sub); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		sub.StartedAt = time.Now()
+		if sub.ExpiresAt.IsZero() {
+			sub.ExpiresAt = time.Now().Add(30 * 24 * time.Hour)
+		}
+		db.Create(&sub)
+		c.JSON(http.StatusCreated, sub)
+	}
+}
+
+func DeleteSubscription(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		db.Delete(&models.Subscription{}, id)
+		c.JSON(http.StatusOK, gin.H{"message": "deleted"})
+	}
+}
+
 func DeleteInbound(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
+		var inbound models.Inbound
+		db.First(&inbound, id)
+
 		db.Delete(&models.Inbound{}, id)
+
+		if inbound.Port > 0 {
+			xray := services.NewXrayManager()
+			xray.RemoveInbound(inbound.Port)
+		}
+
 		c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 	}
 }

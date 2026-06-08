@@ -7,7 +7,8 @@ import (
 type User struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	UUID         string     `gorm:"uniqueIndex;size:36" json:"uuid"`
-	Email        string     `gorm:"uniqueIndex;size:255" json:"email"`
+	Name         string     `gorm:"size:100" json:"name"`
+	Email        string     `gorm:"size:255" json:"email,omitempty"`
 	PasswordHash string     `gorm:"size:255" json:"-"`
 	Role         string     `gorm:"size:20;default:user" json:"role"`
 	Status       string     `gorm:"size:20;default:active" json:"status"`
@@ -97,6 +98,23 @@ type TrafficDaily struct {
 	Date          string `gorm:"size:10" json:"date"`
 	UploadTotal   int64  `json:"upload_total"`
 	DownloadTotal int64  `json:"download_total"`
+}
+
+
+type SubscriptionProfile struct {
+	ID              uint       `gorm:"primaryKey" json:"id"`
+	UserID          uint       `json:"user_id"`
+	Name            string     `gorm:"size:100" json:"name"`
+	UUID            string     `gorm:"uniqueIndex;size:36" json:"uuid"`
+	PlanID          uint       `json:"plan_id"`
+	NodeID          uint       `json:"node_id"`
+	InboundIDs      string     `gorm:"type:text" json:"inbound_ids"` // JSON array: [1, 3, 5]
+	ExpiresAt       time.Time  `json:"expires_at"`
+	Status          string     `gorm:"size:20;default:active" json:"status"`
+	TrafficUsed     int64      `gorm:"default:0" json:"traffic_used"`
+	SubscriptionURL string     `gorm:"size:500" json:"subscription_url"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type EventLog struct {
