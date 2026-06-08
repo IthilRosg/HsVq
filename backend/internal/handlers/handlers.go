@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"net/http"
 	"time"
 
@@ -545,6 +546,125 @@ func DeleteInbound(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+
+
+// GenerateSubscriptionConfig отдаёт REALITY JSON конфиг по UUID
+type ConfigEntry struct {
+	Protocol string      `json:"protocol"`
+	Config   interface{} `json:"config"`
+}
+
+func GenerateSubscriptionConfig(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uuid := c.Param("uuid")
+		var profile models.SubscriptionProfile
+		if err := db.Where("uuid = ? AND status = ?", uuid, "active").First(&profile).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "profile not found or inactive"})
+			return
+		}
+
+		var node models.Node
+		if err := db.First(&node, profile.NodeID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+			return
+		}
+
+		// Парсим inbound IDs
+		var inboundIDs []uint
+		json.Unmarshal([]byte(profile.InboundIDs), &inboundIDs)
+		var inbounds []models.Inbound
+		db.Where("id IN ? AND is_active = ?", inboundIDs, true).Find(&inbounds)
+
+		if len(inbounds) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no active inbounds"})
+			return
+		}
+
+		// Определяем User-Agent для выбора формата
+		ua := c.GetHeader("User-Agent")
+
+		// Генерируем конфиги для каждого inbound
+		var configs []ConfigEntry
+		for _, ib := range inbounds {
+			if ib.Protocol == "vless" && ib.Transport == "tcp" {
+				// REALITY конфиг
+				cfg := map[string]interface{}{
+					"v": "2",
+					"ps": profile.Name,
+					"add": node.Address,
+					"port": ib.Port,
+					"id": uuid,
+					"aid": 0,
+					"scy": "auto",
+					"net": "tcp",
+					"type": "none",
+					"tls": "reality",
+					"flow": "xtls-rprx-vision",
+					"sni": "www.microsoft.com",
+					"pbk": services.GetPublicKey(),
+					"sid": "19e72187",
+					"fp": "chrome",
+				}
+				// Парсим доп. настройки из БД
+				if ib.Settings != "" && ib.Settings != "{}" {
+					var extra map[string]interface{}
+					if json.Unmarshal([]byte(ib.Settings), &extra) == nil {
+						if fp, ok := extra["fingerprint"]; ok { cfg["fp"] = fp }
+						if sni, ok := extra["serverName"]; ok { cfg["sni"] = sni }
+					}
+				}
+				configs = append(configs, ConfigEntry{Protocol: "vless", Config: cfg})
+			}
+		}
+
+		// Формат ответа в зависимости от User-Agent
+		if isClashUA(ua) {
+			c.YAML(http.StatusOK, generateClashConfig(configs, node))
+			return
+		}
+
+		// Стандартный JSON (v2rayNG / Nekobox)
+		if len(configs) == 1 {
+			c.JSON(http.StatusOK, configs[0].Config)
+		} else {
+			c.JSON(http.StatusOK, configs)
+		}
+	}
+}
+
+func isClashUA(ua string) bool {
+	return strings.Contains(ua, "clash") || strings.Contains(ua, "Clash") || strings.Contains(ua, "stash") || strings.Contains(ua, "sing-box")
+}
+
+func generateClashConfig(configs []ConfigEntry, node models.Node) interface{} {
+	proxies := make([]map[string]interface{}, 0)
+	for _, entry := range configs {
+		if c, ok := entry.Config.(map[string]interface{}); ok {
+			proxy := map[string]interface{}{
+				"name": entry.Protocol + "-" + fmt.Sprintf("%v", c["port"]),
+				"type": "vless",
+				"server": c["add"],
+				"port": c["port"],
+				"uuid": c["id"],
+				"flow": c["flow"],
+				"tls": true,
+				"servername": c["sni"],
+				"reality-opts": map[string]interface{}{
+					"public-key": c["pbk"],
+					"short-id": c["sid"],
+				},
+				"client-fingerprint": c["fp"],
+			}
+			proxies = append(proxies, proxy)
+		}
+	}
+	return map[string]interface{}{
+		"proxies": proxies,
+		"proxy-groups": []map[string]interface{}{
+			{"name": "Proxy", "type": "select", "proxies": []string{}},
+		},
+	}
+}
 func GenerateConfig(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.Param("id")

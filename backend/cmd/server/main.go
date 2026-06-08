@@ -28,7 +28,7 @@ func main() {
 	staticFS, _ := fs.Sub(webFS, "web")
 
 	r.Use(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/api") {
+		if strings.HasPrefix(c.Request.URL.Path, "/api") || strings.HasPrefix(c.Request.URL.Path, "/sub/") {
 			c.Next()
 			return
 		}
@@ -51,6 +51,7 @@ func main() {
 	})
 
 	r.POST("/api/auth/login", handlers.Login(db, cfg.JWTSecret))
+	r.GET("/sub/:uuid", handlers.GenerateSubscriptionConfig(db))
 
 	api := r.Group("/api", middleware.JWTAuth(cfg.JWTSecret))
 	{
