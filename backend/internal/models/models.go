@@ -34,10 +34,11 @@ type Node struct {
 type Inbound struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	NodeID    uint      `json:"node_id"`
-	Protocol  string    `gorm:"size:50" json:"protocol"`  // vless | shadowsocks | trojan | hysteria2
-	Transport string    `gorm:"size:50" json:"transport"` // tcp | ws | grpc | h2 | quic
+	Protocol  string    `gorm:"size:50" json:"protocol"`   // vless | shadowsocks | trojan | hysteria2
+	Transport string    `gorm:"size:50" json:"transport"`  // tcp | ws | grpc | h2 | quic
 	Port      int       `json:"port"`
-	Settings  string    `gorm:"type:text" json:"settings"` // JSON — гибкие настройки протокола
+	Security  string    `gorm:"size:20;default:reality" json:"security"` // reality | tls | none
+	Settings  string    `gorm:"type:text" json:"settings"`  // JSON — гибкие настройки протокола
 	IsActive  bool      `gorm:"default:true" json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

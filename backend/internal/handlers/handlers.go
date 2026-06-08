@@ -434,6 +434,18 @@ func CreateInbound(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+
+		// Валидация перед сохранением
+		if err := services.ValidateInboundConfig(inbound.Protocol, inbound.Port, inbound.Security, inbound.Transport); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Если security не указан — ставим REALITY для VLESS
+		if inbound.Security == "" && inbound.Protocol == "vless" {
+			inbound.Security = "reality"
+		}
+
 		db.Create(&inbound)
 
 		// Синхронизируем с Xray
@@ -552,6 +564,36 @@ func DeleteInbound(db *gorm.DB) gin.HandlerFunc {
 type ConfigEntry struct {
 	Protocol string      `json:"protocol"`
 	Config   interface{} `json:"config"`
+}
+
+
+
+// GetTemplates возвращает список шаблонов конфигов
+func GetTemplates() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, services.GetConfigTemplates())
+	}
+}
+
+// ValidateConfig проверяет конфиг inbound перед сохранением
+func ValidateConfig() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Protocol string `json:"protocol"`
+			Port     int    `json:"port"`
+			Security string `json:"security"`
+			Transport string `json:"transport"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"valid": false, "error": err.Error()})
+			return
+		}
+		if err := services.ValidateInboundConfig(req.Protocol, req.Port, req.Security, req.Transport); err != nil {
+			c.JSON(http.StatusOK, gin.H{"valid": false, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"valid": true})
+	}
 }
 
 func GenerateSubscriptionConfig(db *gorm.DB) gin.HandlerFunc {
