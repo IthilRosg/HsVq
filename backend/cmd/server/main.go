@@ -94,6 +94,7 @@ func main() {
 		nodes.PATCH("/:id/toggle", handlers.ToggleNode(db))
 		nodes.DELETE("/:id", handlers.DeleteNode(db))
 
+		api.GET("/traffic/history", handlers.GetTrafficHistory(db))
 		api.GET("/templates", handlers.GetTemplates())
 		api.POST("/validate-config", handlers.ValidateConfig())
 

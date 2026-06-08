@@ -570,6 +570,39 @@ type ConfigEntry struct {
 
 
 // GetTemplates возвращает список шаблонов конфигов
+
+
+// GetTrafficHistory возвращает историю трафика за N дней
+func GetTrafficHistory(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		days := 7
+		if d := c.Query("days"); d != "" {
+			fmt.Sscanf(d, "%d", &days)
+		}
+		if days > 90 { days = 90 }
+
+		type DayStat struct {
+			Date   string `json:"date"`
+			Up     int64  `json:"up"`
+			Down   int64  `json:"down"`
+		}
+		var stats []DayStat
+
+		// Генерируем последние N дней
+		for i := days - 1; i >= 0; i-- {
+			date := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
+			var up, down int64
+			db.Model(&models.TrafficDaily{}).Where("date = ?", date).
+				Select("COALESCE(SUM(upload_total), 0)").Scan(&up)
+			db.Model(&models.TrafficDaily{}).Where("date = ?", date).
+				Select("COALESCE(SUM(download_total), 0)").Scan(&down)
+			stats = append(stats, DayStat{Date: date, Up: up, Down: down})
+		}
+
+		c.JSON(http.StatusOK, stats)
+	}
+}
+
 func GetTemplates() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, services.GetConfigTemplates())
